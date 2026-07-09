@@ -1,0 +1,140 @@
+# ✈️ Flight Delay Prediction — End-to-End ML Pipeline
+
+Predicts whether a US domestic flight will depart more than 15 minutes late, using only information known **before** the flight departs (schedule, route, carrier, airport — no live weather or ATC data).
+
+## Problem & Motivation
+
+Airlines and airports want to flag high-risk flights ahead of time (e.g. to proactively notify passengers or adjust staffing). This project builds that prediction as a full pipeline: raw data → cleaning → features → model → served API → containerized.
+
+**Target:** `is_delayed` (binary) — `DEP_DELAY > 15 minutes`
+**Metric priority:** ROC-AUC / PR-AUC / recall (the data is ~80/20 imbalanced, so accuracy alone is meaningless)
+
+## Dataset
+
+[Flight Delay and Cancellation Data (2019–2023)](https://www.kaggle.com/datasets/patrickzel/flight-delay-and-cancellation-dataset-2019-2023) — `flights_sample_3m.csv`, ~3M rows of US DOT on-time performance data.
+
+## Pipeline
+
+```
+raw CSV
+  → src/data/clean_data.py        (remove cancelled/diverted, drop leakage cols, handle missing)
+  → notebooks/eda.ipynb           (exploration — delay patterns by hour/airline/route)
+  → src/features/build_features.py (time-based split, smoothed target encoding, cyclical features)
+  → src/models/train.py           (XGBoost + MLflow tracking, saves model + preprocessor + rate maps)
+  → src/api/main.py               (FastAPI serving)
+  → Dockerfile                    (containerized, verified identical behavior to local)
+```
+
+## Key engineering decisions
+
+- **Leakage removal:** dropped all columns only known during/after the flight (`ARR_DELAY`, `TAXI_OUT`, `DEP_TIME`, delay-cause breakdowns, etc.) — using them would let the model "cheat."
+- **Time-based train/test split** (not random) — trains on earlier flights, tests on later ones, matching how the model would actually be used in production (predicting forward in time).
+- **Smoothed target encoding** for high-cardinality categoricals (airline, origin, destination, route) — protects rare categories from noisy raw averages via `(n·mean + m·global_mean)/(n+m)`.
+- **No feature scaling** — tree-based model (XGBoost) doesn't need it; kept the preprocessing pipeline minimal per XGBoost best practice.
+
+## Results
+
+| Model | ROC-AUC | PR-AUC | Recall (delayed) | Precision (delayed) |
+|---|---|---|---|---|
+| Logistic Regression (baseline) | 0.65 | – | 0.60 | 0.25 |
+| XGBoost (final) | 0.68 | 0.38 | 0.67 | 0.32 |
+
+Baseline positive rate is ~18-20%, so PR-AUC of 0.38 is roughly 2x better than random guessing.
+
+**Top features:** scheduled hour (cyclical encoding), departure period (morning/afternoon/evening/night), and route/carrier historical delay rate dominate — time-of-day is the single strongest driver, more than airline or route identity.
+
+## Error analysis
+
+- **By time of day:** error rate is lowest in the morning (0.19) and highest in the evening (0.57) — consistent with delays cascading through the day as aircraft/crew rotations fall behind schedule.
+- **By airline:** budget/leisure carriers (Allegiant, JetBlue, Frontier, Spirit) show the highest error rates — plausible explanation is that these carriers run tighter aircraft rotations, so delays are driven by upstream mechanical/rotation issues this model has no visibility into (no tail-number or previous-leg-delay data available).
+
+**Known limitation:** the model uses only scheduling data — no live weather, no air traffic control conditions, no aircraft rotation history. This caps achievable accuracy; a production system would ideally join weather and tail-number rotation data.
+
+## How to run
+
+### 1. Clone and set up
+```bash
+git clone https://github.com/Tarnished-byte/Flight-Delay-Prediction.git
+cd Flight-Delay-Prediction
+pip install -r requirements.txt
+```
+
+### 2. Get the data
+Download `flights_sample_3m.csv` from Kaggle (link above) and place it at:
+```
+data/raw/flights_sample_3m.csv
+```
+
+### 3. Run the pipeline
+```bash
+python -m src.data.clean_data
+python -m src.models.train
+```
+
+### 4. Serve locally
+```bash
+uvicorn src.api.main:app --reload
+```
+Visit `http://localhost:8000/docs` to test `/predict` interactively.
+
+### 5. Or run via Docker
+```bash
+docker build -t flight-delay-api .
+docker run -p 8000:8000 flight-delay-api
+```
+
+### Example request
+```json
+POST /predict
+{
+  "FL_DATE": "2024-06-15",
+  "AIRLINE": "Southwest Airlines Co.",
+  "ORIGIN": "ORD",
+  "DEST": "LAX",
+  "CRS_DEP_TIME": 1830,
+  "CRS_ARR_TIME": 2045,
+  "CRS_ELAPSED_TIME": 255,
+  "DISTANCE": 1745
+}
+```
+```json
+{
+  "delay_probability": 0.7704,
+  "predicted_delayed": true
+}
+```
+
+## Experiment tracking
+
+All training runs are logged with MLflow (params, metrics, model artifacts). View locally:
+```bash
+mlflow ui
+```
+
+## Project structure
+
+```
+├── data/
+│   ├── raw/                  # place flights_sample_3m.csv here (not tracked in git)
+│   └── processed/            # cleaned data, generated by clean_data.py
+├── notebooks/
+│   ├── eda.ipynb             # exploration only
+│   └── model.ipynb
+├── src/
+│   ├── data/clean_data.py    # missing values, leakage removal
+│   ├── features/build_features.py  # feature engineering, target encoding, preprocessing
+│   ├── models/train.py       # training + MLflow tracking
+│   └── api/main.py           # FastAPI serving
+├── models/                   # saved model artifact (not tracked in git)
+├── Dockerfile
+├── requirements.txt
+└── .github/workflows/ci.yml
+```
+
+## What's next
+
+- Unit tests for the feature pipeline
+- Config-driven paths/hyperparameters (`configs/config.yaml`)
+- Join weather data (NOAA) for stronger signal
+- Deploy publicly (Render/HuggingFace Spaces)
+- Monitor for data/prediction drift in production
