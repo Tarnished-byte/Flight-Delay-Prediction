@@ -1,0 +1,13 @@
+data/
+mlruns/
+notebooks/
+tests/
+.git/
+.gitignore
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
+.env
+venv/
+README.md
