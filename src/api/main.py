@@ -3,6 +3,7 @@ import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.features.build_features import (
     engineer_deterministic_features,
@@ -13,6 +14,13 @@ from src.features.build_features import (
 MODEL_PATH = "models/xgb_flight_delay.joblib"
 
 app = FastAPI(title="Flight Delay Prediction API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # fine for local/demo use; restrict in real production
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 artifact = joblib.load(MODEL_PATH)
 model = artifact["model"]
