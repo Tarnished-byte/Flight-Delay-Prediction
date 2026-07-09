@@ -1,4 +1,4 @@
-data/
+dataset/
 mlruns/
 models/*.joblib
 __pycache__/
