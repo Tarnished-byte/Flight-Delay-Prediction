@@ -130,11 +130,3 @@ mlflow ui
 ├── requirements.txt
 └── .github/workflows/ci.yml
 ```
-
-## What's next
-
-- Unit tests for the feature pipeline
-- Config-driven paths/hyperparameters (`configs/config.yaml`)
-- Join weather data (NOAA) for stronger signal
-- Deploy publicly (Render/HuggingFace Spaces)
-- Monitor for data/prediction drift in production
